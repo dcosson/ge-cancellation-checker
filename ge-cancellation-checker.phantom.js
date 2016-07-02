@@ -7,6 +7,7 @@ var fs = require('fs');
 
 var VERBOSE = false;
 var loadInProgress = false;
+var readyToExit = false;
 
 // Calculate path of this file
 var PWD = '';
@@ -42,7 +43,6 @@ function fireClick(el) {
 }
 
 var page = require('webpage').create();
-page.settings.userAgent = 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/37.0.2062.120 Safari/537.36';
 
 page.onConsoleMessage = function(msg) {
     if (!VERBOSE) { return; }
@@ -65,11 +65,6 @@ page.onCallback = function(query, msg) {
         else { console.log(msg); }
         return;  
     }
-    if (query == 'report-no-interviews') {                                                                                                                                                  
-        if (VERBOSE) { console.log('No new interviews available. Please try again later.'); }
-        else { console.log('None'); }
-        return;
-    }
     if (query == 'fatal-error') {
         console.log('Fatal error: ' + msg);
         phantom.exit();
@@ -80,6 +75,14 @@ page.onCallback = function(query, msg) {
 page.onLoadStarted = function() { loadInProgress = true; };
 page.onLoadFinished = function() { loadInProgress = false; };
 
+page.onResourceReceived = function(response) {
+    // console.log('resource received: ' + response.url);    
+}
+
+page.onResourceError = function(resourceError) {
+  console.log('resource error! ' + resourceError);
+}
+
 if (VERBOSE) { console.log('Please wait...'); }
 
 page.open(settings.init_url);
@@ -88,10 +91,7 @@ var steps = [
         page.evaluate(function() {
             console.log('On GOES login page...');
             document.querySelector('input[name=username]').value = window.callPhantom('username');
-
-            /* The GE Login page limits passwords to only 12 characters, but phantomjs can get around 
-               this limitation, which causes the fatal error "Unable to find terms acceptance button" */
-            document.querySelector('input[name=password]').value = window.callPhantom('password').substring(0,12);
+            document.querySelector('input[name=password]').value = window.callPhantom('password');
             document.querySelector('form[action="/pkmslogin.form"]').submit();
             console.log('Logging in...');
         });
@@ -163,31 +163,84 @@ var steps = [
 
             document.querySelector('select[name=selectedEnrollmentCenter]').value = location_id;
             fireClick(document.querySelector('input[name=next]'));
-
-            var location_name = document.querySelector('option[value="' + location_id + '"]').text;
-            console.log('Choosing Location: ' + location_name);
+            console.log('Choosing SFO...');
         }, settings.enrollment_location_id.toString());
     },
     function() {
+        page.evaluate(function(currentAppointmentString) {
 
-        page.evaluate(function() {
-
-            // If there are no more appointments available at all, there will be a message saying so.
-            try {
-                if (document.querySelector('span.SectionHeader').innerHTML == 'Appointments are Fully Booked') {
-                    window.callPhantom('report-no-interviews');
-                    return;
-                }
-            } catch(e) { }
+            function fireMouseUp(el) {
+                var ev = document.createEvent("MouseEvents");
+                ev.initEvent("mouseup", true, true);
+                el.dispatchEvent(ev);
+            }
 
             // We made it! Now we have to scrape the page for the earliest available date
+            
             var date = document.querySelector('.date table tr:first-child td:first-child').innerHTML;
             var month_year = document.querySelector('.date table tr:last-child td:last-child div').innerHTML;
 
             var full_date = month_year.replace(',', ' ' + date + ',');
+            var dateObj = new Date(full_date);
+
+            console.log('Current appointment is: ' + currentAppointmentString);
+            var currentAppointment = new Date(Date.parse(currentAppointmentString));
+            console.log('on prev Page ' + document.title);
+
+            if (dateObj >= currentAppointment) {
+              return window.callPhantom('report-interview-time', full_date);
+            } else {
+              var nextOpenTime = document.querySelector('table.foreground').querySelector('a.entry');
+              fireMouseUp(nextOpenTime)
+            }
             // console.log('');
-            window.callPhantom('report-interview-time', full_date)
             // console.log('The next available appointment is on ' + full_date + '.');
+        }, settings.current_interview_date_str);
+    },
+    function() {
+        // page.onUrlChanged = function(targetUrl) {
+        //     console.log('url changed to ' + targetUrl);
+        //     readyToExit = true;
+        // }
+        page.evaluate(function() {
+
+            function fireClick(el) {
+                var ev = document.createEvent("MouseEvents");
+                ev.initEvent("click", true, true);
+                el.dispatchEvent(ev);
+            }
+
+            // Now on the confirm page, need to set a reason and confirm
+            // First, grab our new Date again
+            console.log('on Page ' + document.title);
+            console.log('url ' + window.location.href);
+            var ds = document.querySelector('.mainContent .maincontainer').querySelectorAll('p')[8].innerText;
+            var ts = document.querySelector('.mainContent .maincontainer').querySelectorAll('p')[9].innerText;
+            var newDateString = ds.split('New Interview Date: ')[1];
+            var newTimeString = ts.split('New Interview Time: ')[1];
+            var newHour = newTimeString.split(':')[0];
+            var newMinute = newTimeString.split(':')[1];
+            // var newDate = new Date(Date.parse(newDateString));
+            // newDate.setHours(newHour);
+            // newDate.setMinutes(newMinute);
+
+            // var desiredTimeStrings = [];
+            var desiredTimeStrings = [
+                 "8:00",  "8:15",  "8:30",  "8:45",  
+                "17:00", "17:15", "17:30", "17:45",  
+                "18:00", "18:15", "18:30", "18:45"];
+            var isDesiredTime = desiredTimeStrings.indexOf(newTimeString) !== -1 || newDateString == "May 28, 2016";
+            if (isDesiredTime) {
+                console.log('Choosing new appointment on ' + newDateString + ' at ' + newTimeString);
+
+                document.getElementById('comments').value = 'Found a sooner date';
+                var confirmButton = document.querySelector('input.button[name=Confirm]');
+                fireClick(confirmButton);
+                console.log('got newer date!');
+            } else {
+                console.error('Found a sooner date ' + newDateString + ' but ' + newTimeString + ' was not a desired time');
+            }
+            window.callPhantom('report-interview-time', newDateString);
         });
     }
 ];
@@ -196,6 +249,7 @@ var i = 0;
 interval = setInterval(function() {
     if (loadInProgress) { return; } // not ready yet...
     if (typeof steps[i] != "function") {
+        //if (!readyToExit) { return; }
         return phantom.exit();
     }
 
@@ -203,3 +257,4 @@ interval = setInterval(function() {
     i++;
 
 }, 100);
+

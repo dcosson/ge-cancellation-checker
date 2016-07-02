@@ -1,5 +1,12 @@
 # Global Entry Appointment Cancellation Checker #
 
+Forked version of the appointment checker.
+
+Instead of just emailing you when it finds an available time, it books the slot for you if it's before the date you set and within the hard-coded list of acceptable time slots (not the earliest or latest slots). I didn't bother refactoring anything, so it'll still send you the email that it just found an opening, but that means it booked it.
+
+
+### Existing docs
+
 This allows you to check and set up notifications for Global Entry enrollment appointment cancellations through the [Global Online Enrollment System website](https://goes-app.cbp.dhs.gov/). It uses [PhantomJS](http://phantomjs.org/), a headless browser, to log in and report back the first available open appointment. If one is found sooner than your current appointment, it will notify you by email. It **does not** make any changes to your account or your appointment.
 
 # Before You Begin...
